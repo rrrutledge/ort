@@ -40,10 +40,13 @@ import org.ossreviewtoolkit.model.KnownProvenance
 import org.ossreviewtoolkit.model.OrtResult
 import org.ossreviewtoolkit.model.Package
 import org.ossreviewtoolkit.model.PackageType
+import org.ossreviewtoolkit.model.Provenance
+import org.ossreviewtoolkit.model.ProvenanceResolutionResult
 import org.ossreviewtoolkit.model.RepositoryProvenance
 import org.ossreviewtoolkit.model.ScanResult
 import org.ossreviewtoolkit.model.ScanSummary
 import org.ossreviewtoolkit.model.ScannerRun
+import org.ossreviewtoolkit.model.VcsInfo
 import org.ossreviewtoolkit.model.config.DownloaderConfiguration
 import org.ossreviewtoolkit.model.config.Options
 import org.ossreviewtoolkit.model.config.ScannerConfiguration
@@ -113,7 +116,7 @@ class Scanner(
         } else {
             logger.info { "Skipping project scan as no project scanner is configured." }
 
-            emptyMap()
+            ScannerRun.EMPTY
         }
 
         val packageResults = if (packageScannerWrappers.isNotEmpty()) {
@@ -126,10 +129,8 @@ class Scanner(
         } else {
             logger.info { "Skipping package scan as no package scanner is configured." }
 
-            emptyMap()
+            ScannerRun.EMPTY
         }
-
-        val scanResults = projectResults + packageResults
 
         val endTime = Instant.now()
 
@@ -148,14 +149,22 @@ class Scanner(
         }
 
         val filteredScannerConfig = scannerConfig.copy(options = filteredScannerOptions)
-        val scannerRun = ScannerRun(startTime, endTime, Environment(), filteredScannerConfig, scanResults)
+
+        val scannerRun = ScannerRun(
+            startTime = startTime,
+            endTime = endTime,
+            environment = Environment(),
+            config = filteredScannerConfig,
+            provenances = projectResults.provenances + packageResults.provenances,
+            scanResults = projectResults.scanResults + packageResults.scanResults
+        )
 
         return ortResult.copy(scanner = scannerRun)
     }
 
-    suspend fun scan(packages: Set<Package>, context: ScanContext): Map<Identifier, List<ScanResult>> {
+    suspend fun scan(packages: Set<Package>, context: ScanContext): ScannerRun {
         val scanners = scannerWrappers[context.packageType].orEmpty()
-        if (scanners.isEmpty()) return emptyMap()
+        if (scanners.isEmpty()) return ScannerRun.EMPTY
 
         val controller = ScanController(packages, scanners, scannerConfig)
 
@@ -171,13 +180,28 @@ class Scanner(
         createMissingFileLists(controller)
         createMissingArchives(controller)
 
-        val results = controller.getNestedScanResultsByPackage().entries.associateTo(sortedMapOf()) {
-            it.key.id to it.value.merge()
-        }
+        return ScannerRun.EMPTY.copy(
+            config = scannerConfig,
+            provenances = packages.map { pkg ->
+                val id = pkg.id
+                val packageProvenance = controller.getPackageProvenance(id)
+                val packageProvenanceResolutionIssue = controller.getPackageProvenanceResolutionIssue(id)
+                val subRepositories = controller.getSubRepositories(id)
+                // TODO: Make getNestedProvenanceResolutionIssue() take an ID.
+                val nestedProvenanceResolutionIssue = packageProvenance?.let {
+                    controller.getNestedProvenanceResolutionIssue(it)
+                }
 
-        val issueResults = controller.getResultsForProvenanceResolutionIssues()
-
-        return results + issueResults
+                ProvenanceResolutionResult(
+                    id,
+                    packageProvenance,
+                    subRepositories,
+                    packageProvenanceResolutionIssue,
+                    nestedProvenanceResolutionIssue
+                )
+            },
+            scanResults = controller.getAllScanResults().map { it.copy(provenance = it.provenance.alignRevisions()) }
+        )
     }
 
     private suspend fun resolvePackageProvenances(controller: ScanController) {
@@ -715,4 +739,17 @@ fun ScanResult.toNestedProvenanceScanResult(nestedProvenance: NestedProvenance):
     }
 
     return NestedProvenanceScanResult(nestedProvenance, scanResultsByProvenance)
+}
+
+fun <T : Provenance> T.alignRevisions(): Provenance =
+    if (this is RepositoryProvenance) {
+        this.copy(vcsInfo = vcsInfo.copy(revision = resolvedRevision))
+    } else {
+        this
+    }
+
+private fun ScanController.getSubRepositories(id: Identifier): Map<String, VcsInfo> {
+    val nestedProvenance = getNestedProvenance(id) ?: return emptyMap()
+
+    return nestedProvenance.subRepositories.entries.associate { (path, provenance) -> path to provenance.vcsInfo }
 }

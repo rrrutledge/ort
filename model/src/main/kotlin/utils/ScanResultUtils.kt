@@ -39,7 +39,9 @@ import org.ossreviewtoolkit.model.SnippetFinding
  */
 fun mergeScanResultsByScanner(scanResultsByPath: Map<String, List<ScanResult>>): List<ScanResult> {
     val rootProvenance = scanResultsByPath.getValue("").map { it.provenance }.distinct().also {
-        require(it.size == 1) { "There must be exactly one unique provenance associated with the empty path." }
+        require(it.size == 1) {
+            "There must be exactly one unique provenance associated with the empty path: ${it.joinToString()}."
+        }
     }.first()
 
     val allScanners = scanResultsByPath.values.flatMapTo(mutableSetOf()) { results -> results.map { it.scanner } }
