@@ -17,4 +17,6 @@
  * License-Filename: LICENSE
  */
 
-// Nothing needed here.
+repositories {
+    mavenCentral()
+}

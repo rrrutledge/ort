@@ -17,4 +17,6 @@
  * License-Filename: LICENSE
  */
 
-// TODO: Move common build logic to here.
+repositories {
+    mavenCentral()
+}

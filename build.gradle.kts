@@ -135,10 +135,6 @@ val mergeDetektReports by tasks.registering(ReportMergeTask::class) {
 }
 
 allprojects {
-    repositories {
-        mavenCentral()
-    }
-
     apply(plugin = "io.gitlab.arturbosch.detekt")
 
     // Note: Kotlin DSL cannot directly access configurations that are created by applying a plugin in the very same
